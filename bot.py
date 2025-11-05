@@ -2,20 +2,26 @@ import os
 import yt_dlp
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
-
-# استيراد الدالة من الملف المنفصل
-from model_gpt import generate_bot_message
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler,
+    CallbackQueryHandler, ContextTypes, filters
+)
 
 TOKEN = os.getenv("BOT_TOKEN")
+DOWNLOAD_FOLDER = "downloads"
+os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-# ===== رسالة البداية =====
+# ========= أوامر البوت =========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 أهلاً بك! أرسل أي رابط فيديو من Facebook / YouTube / TikTok / Instagram / Twitter وسأقوم بتحميله لك 🔥"
+        "👋 أهلاً بك!\n"
+        "أنا بوت التحميل الشامل 🔥\n"
+        "أرسل أي رابط من المنصات التالية:\n"
+        "📘 Facebook\n📸 Instagram\n🎵 TikTok\n▶️ YouTube\n🐦 Twitter/X\n\n"
+        "وسأقوم بتحميله لك!"
     )
 
-# ===== اكتشاف المنصة =====
+# ========= اكتشاف المنصة =========
 def detect_platform(url: str):
     if "facebook.com" in url or "fb.watch" in url:
         return "Facebook"
@@ -30,15 +36,13 @@ def detect_platform(url: str):
     else:
         return None
 
-# ===== تحميل الفيديو/صوت =====
-def download_media(url: str, audio_only=False):
-    filename = "downloads/media.%(ext)s"
-    os.makedirs("downloads", exist_ok=True)
-
+# ========= تحميل الفيديو/صوت =========
+def download_media(url: str, audio_only=False, resolution=None):
+    filename = f"{DOWNLOAD_FOLDER}/media.%(ext)s"
     ydl_opts = {
         "outtmpl": filename,
         "quiet": True,
-        "noplaylist": True
+        "noplaylist": True,
     }
 
     if audio_only:
@@ -55,15 +59,13 @@ def download_media(url: str, audio_only=False):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
         ext = "mp3" if audio_only else "mp4"
-        return f"downloads/media.{ext}", info.get("title", "فيديو بدون عنوان")
+        return f"{DOWNLOAD_FOLDER}/media.{ext}", info.get("title", "فيديو بدون عنوان")
     except Exception as e:
         print(f"❌ خطأ أثناء التحميل: {e}")
         return None, None
 
-# ===== التعامل مع YouTube مع أزرار الفيديو/صوت =====
+# ========= التعامل مع YouTube مع أزرار الفيديو/صوت =========
 async def handle_youtube(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
     keyboard = [
         [InlineKeyboardButton("🎬 تحميل الفيديو", callback_data=f"video|{url}")],
         [InlineKeyboardButton("🎵 تحميل الصوت", callback_data=f"audio|{url}")]
@@ -71,39 +73,39 @@ async def handle_youtube(update: Update, context: ContextTypes.DEFAULT_TYPE, url
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("اختر نوع التحميل:", reply_markup=reply_markup)
 
-# ===== التعامل مع الرسائل =====
+# ========= التعامل مع الرسائل =========
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text.strip()
-    platform = detect_platform(user_text)
+    url = update.message.text.strip()
+    platform = detect_platform(url)
 
-    # توليد رد تفاعلي باستخدام GPT
-    bot_reply = generate_bot_message(f"الرد على المستخدم الذي كتب: {user_text}")
-    
     if not platform:
-        await update.message.reply_text(bot_reply)
+        await update.message.reply_text("⚠️ أرسل رابط من Facebook / Instagram / TikTok / YouTube / Twitter فقط.")
         return
 
     if platform == "YouTube":
-        await handle_youtube(update, context, user_text)
+        await handle_youtube(update, context, url)
     else:
         await update.message.reply_text(f"⏳ جاري تحميل الفيديو من {platform}...")
-        video_path, title = await asyncio.to_thread(download_media, user_text)
+        video_path, title = await asyncio.to_thread(download_media, url)
         if video_path and os.path.exists(video_path):
             await update.message.reply_video(video=open(video_path, "rb"), caption=f"✅ تم التحميل من {platform}\n🎬 {title}")
             os.remove(video_path)
         else:
-            await update.message.reply_text("❌ فشل التحميل. تحقق من الرابط أو أن الفيديو عام.")
+            await update.message.reply_text("❌ لم أتمكن من تحميل الفيديو. تحقق من الرابط.")
 
-# ===== التعامل مع أزرار Inline =====
+# ========= التعامل مع أزرار Inline =========
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    mode, url = query.data.split("|")
+    data = query.data
+    mode, url = data.split("|")
     audio_only = True if mode == "audio" else False
+
     await query.edit_message_text(f"⏳ جاري التحميل ({mode}) من YouTube...")
 
     video_path, title = await asyncio.to_thread(download_media, url, audio_only=audio_only)
+
     if video_path and os.path.exists(video_path):
         if audio_only:
             await query.message.reply_document(document=open(video_path, "rb"), caption=f"✅ تم تحميل الصوت: {title}")
@@ -113,13 +115,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await query.message.reply_text("❌ فشل التحميل. تحقق من الرابط.")
 
-# ===== التشغيل =====
+# ========= تشغيل البوت =========
 def main():
     app = Application.builder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(button_callback))
-    print("🚀 البوت يعمل الآن")
+
+    print("🚀 البوت الشامل يعمل الآن")
     app.run_polling()
 
 if __name__ == "__main__":
