@@ -7,8 +7,8 @@ from telegram.ext import (
     CallbackQueryHandler, ContextTypes, filters
 )
 
-# ===== استيراد لوحة التحكم من admin.py =====
-from admin import admin_panel, admin_button_callback
+# ===== استيراد لوحة التحكم =====
+from admin import admin_panel, admin_button_callback, handle_admin_input, load_settings
 
 TOKEN = os.getenv("BOT_TOKEN")
 
@@ -20,6 +20,21 @@ os.makedirs("downloads", exist_ok=True)
 
 # ===== رسالة البداية =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    settings = load_settings()
+    force_sub = settings.get("force_subscribe", False)
+    channel_id = settings.get("channel_id", "")
+
+    if force_sub and channel_id:
+        # التحقق من الاشتراك
+        try:
+            member = await context.bot.get_chat_member(chat_id=channel_id, user_id=update.message.from_user.id)
+            if member.status in ["left", "kicked"]:
+                await update.message.reply_text(f"⚠️ يجب عليك الاشتراك في القناة {channel_id} قبل استخدام البوت.")
+                return
+        except:
+            await update.message.reply_text(f"⚠️ لم أتمكن من التحقق من الاشتراك في القناة {channel_id}.")
+            return
+
     await update.message.reply_text(
         "👋 أهلاً بك!\n"
         "أنا بوت التحميل الشامل Ultimate Media Downloader 🔥\n"
@@ -87,6 +102,9 @@ async def handle_youtube(update: Update, context: ContextTypes.DEFAULT_TYPE, url
 
 # ===== التعامل مع الرسائل =====
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # أولًا التحقق إذا كانت الرسالة لإدارة لوحة التحكم
+    await handle_admin_input(update, context)
+    
     url = update.message.text.strip()
     platform = detect_platform(url)
 
@@ -140,7 +158,7 @@ def main():
 
     # لوحة التحكم
     app.add_handler(CommandHandler("admin", admin_panel))
-    app.add_handler(CallbackQueryHandler(admin_button_callback, pattern="^(manage_|broadcast|bot_settings)$"))
+    app.add_handler(CallbackQueryHandler(admin_button_callback, pattern="^(manage_subscription|broadcast|manage_users|bot_settings)$"))
 
     # أزرار YouTube (فيديو/صوت)
     app.add_handler(CallbackQueryHandler(button_callback, pattern="^(video|audio)\|"))
