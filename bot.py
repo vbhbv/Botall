@@ -7,34 +7,10 @@ from telegram.ext import (
     CallbackQueryHandler, ContextTypes, filters
 )
 
-# ===== استيراد لوحة التحكم =====
-from admin import admin_panel, admin_button_callback, handle_admin_input, load_settings
-
 TOKEN = os.getenv("BOT_TOKEN")
-
-# ===== تنظيف مجلد downloads عند بدء التشغيل =====
-import shutil
-if os.path.exists("downloads"):
-    shutil.rmtree("downloads")
-os.makedirs("downloads", exist_ok=True)
 
 # ===== رسالة البداية =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    settings = load_settings()
-    force_sub = settings.get("force_subscribe", False)
-    channel_id = settings.get("channel_id", "")
-
-    if force_sub and channel_id:
-        # التحقق من الاشتراك
-        try:
-            member = await context.bot.get_chat_member(chat_id=channel_id, user_id=update.message.from_user.id)
-            if member.status in ["left", "kicked"]:
-                await update.message.reply_text(f"⚠️ يجب عليك الاشتراك في القناة {channel_id} قبل استخدام البوت.")
-                return
-        except:
-            await update.message.reply_text(f"⚠️ لم أتمكن من التحقق من الاشتراك في القناة {channel_id}.")
-            return
-
     await update.message.reply_text(
         "👋 أهلاً بك!\n"
         "أنا بوت التحميل الشامل Ultimate Media Downloader 🔥\n"
@@ -61,26 +37,34 @@ def detect_platform(url: str):
 # ===== تحميل الفيديو/صوت =====
 def download_media(url: str, audio_only=False, resolution=None):
     filename = "downloads/media.%(ext)s"
-    ydl_opts = {
-        "outtmpl": filename,
-        "quiet": True,
-        "noplaylist": True,
-    }
-
-    if audio_only:
-        ydl_opts["format"] = "bestaudio/best"
-        ydl_opts["postprocessors"] = [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }]
-    else:
-        if resolution:
-            ydl_opts["format"] = f"bestvideo[height<={resolution}]+bestaudio/best"
-        else:
-            ydl_opts["format"] = "bestvideo[ext=mp4]+bestaudio/best"
-
     os.makedirs("downloads", exist_ok=True)
+
+    # خيارات مخصصة للفيسبوك (ريلز وفيديو عادي)
+    if "facebook.com" in url or "fb.watch" in url:
+        ydl_opts = {
+            "outtmpl": filename,
+            "quiet": True,
+            "format": "best[ext=mp4]/best"
+        }
+    else:
+        ydl_opts = {
+            "outtmpl": filename,
+            "quiet": True,
+            "noplaylist": True
+        }
+        if audio_only:
+            ydl_opts["format"] = "bestaudio/best"
+            ydl_opts["postprocessors"] = [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }]
+        else:
+            # اختيار جودة محددة إذا تم تحديدها
+            if resolution:
+                ydl_opts["format"] = f"bestvideo[height<={resolution}]+bestaudio/best"
+            else:
+                ydl_opts["format"] = "bestvideo[ext=mp4]+bestaudio/best"
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -102,9 +86,6 @@ async def handle_youtube(update: Update, context: ContextTypes.DEFAULT_TYPE, url
 
 # ===== التعامل مع الرسائل =====
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # أولًا التحقق إذا كانت الرسالة لإدارة لوحة التحكم
-    await handle_admin_input(update, context)
-    
     url = update.message.text.strip()
     platform = detect_platform(url)
 
@@ -121,17 +102,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_video(video=open(video_path, "rb"), caption=f"✅ تم التحميل من {platform}\n🎬 {title}")
             os.remove(video_path)
         else:
-            await update.message.reply_text("❌ لم أتمكن من تحميل الفيديو. تحقق من الرابط.")
+            await update.message.reply_text("❌ فشل التحميل. تحقق من الرابط أو أن الفيديو عام.")
 
-# ===== التعامل مع أزرار YouTube (فيديو/صوت) =====
+# ===== التعامل مع أزرار Inline =====
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     data = query.data
-    if "|" not in data:
-        return
-
     mode, url = data.split("|")
     audio_only = True if mode == "audio" else False
 
@@ -146,22 +124,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_video(video=open(video_path, "rb"), caption=f"✅ تم تحميل الفيديو: {title}")
         os.remove(video_path)
     else:
-        await query.message.reply_text("❌ فشل التحميل. تحقق من الرابط.")
+        await query.message.reply_text("❌ فشل التحميل. تحقق من الرابط أو أن الفيديو عام.")
 
 # ===== التشغيل =====
 def main():
     app = Application.builder().token(TOKEN).build()
 
-    # أوامر المستخدمين
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    # لوحة التحكم
-    app.add_handler(CommandHandler("admin", admin_panel))
-    app.add_handler(CallbackQueryHandler(admin_button_callback, pattern="^(manage_subscription|broadcast|manage_users|bot_settings)$"))
-
-    # أزرار YouTube (فيديو/صوت)
-    app.add_handler(CallbackQueryHandler(button_callback, pattern="^(video|audio)\|"))
+    app.add_handler(CallbackQueryHandler(button_callback))
 
     print("🚀 البوت الشامل Ultimate Media Downloader يعمل الآن")
     app.run_polling()
