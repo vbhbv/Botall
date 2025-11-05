@@ -1,4 +1,2 @@
-python-telegram-bot
-yt-dlp
-transformers
-torch
+python-telegram-bot==20.8
+yt-dlp==2025.10.22
