@@ -1,13 +1,12 @@
-# admin.py
 import json
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import CallbackQueryHandler, ContextTypes
+from telegram.ext import CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 USERS_FILE = "users.json"
 SETTINGS_FILE = "settings.json"
-ADMIN_ID = 6166700051
+ADMIN_ID = 6166700051  # معرف حسابك
 
-# تحميل المستخدمين والإعدادات
+# ===== تحميل وحفظ البيانات =====
 def load_users():
     try:
         with open(USERS_FILE, "r") as f:
@@ -50,7 +49,7 @@ async def admin_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
 
-    if update.callback_query.from_user.id != ADMIN_ID:
+    if query.from_user.id != ADMIN_ID:
         await query.message.reply_text("❌ ليس لديك صلاحية الوصول للوحة التحكم.")
         return
 
@@ -58,19 +57,63 @@ async def admin_button_callback(update: Update, context: ContextTypes.DEFAULT_TY
     settings = load_settings()
     users = load_users()
 
+    # إدارة الاشتراك الإجباري
     if data == "manage_subscription":
         settings["force_subscribe"] = not settings.get("force_subscribe", False)
         save_settings(settings)
         status = "✅ مفعل" if settings["force_subscribe"] else "❌ معطل"
-        await query.edit_message_text(f"⚡ الاشتراك الإجباري الآن: {status}")
+        text = f"⚡ الاشتراك الإجباري الآن: {status}\n"
+        if settings["force_subscribe"] and not settings.get("channel_id"):
+            text += "📝 لم يتم تعيين قناة، الرجاء إرسال معرف القناة الآن."
+            context.user_data["set_channel"] = True
+        await query.edit_message_text(text)
 
+    # إذاعة الرسائل
     elif data == "broadcast":
         await query.edit_message_text("📢 أرسل الرسالة للإذاعة لجميع المستخدمين:")
         context.user_data["broadcast"] = True
 
+    # إدارة المستخدمين
     elif data == "manage_users":
         total = len(users)
-        await query.edit_message_text(f"👥 عدد المستخدمين: {total}")
+        await query.edit_message_text(f"👥 عدد المستخدمين المسجلين: {total}")
 
+    # إعدادات البوت
     elif data == "bot_settings":
-        await query.edit_message_text(f"⚙️ إعدادات البوت الحالية:\nاشتراك إجباري: {settings.get('force_subscribe')}")
+        channel = settings.get("channel_id", "لم يتم تعيينه")
+        text = (
+            f"⚙️ إعدادات البوت الحالية:\n"
+            f"✅ الاشتراك الإجباري: {settings.get('force_subscribe')}\n"
+            f"📌 قناة الاشتراك: {channel}"
+        )
+        await query.edit_message_text(text)
+
+# ===== التعامل مع الرسائل للإدارة =====
+async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    if user_id != ADMIN_ID:
+        return
+
+    # تعيين قناة الاشتراك الإجباري
+    if context.user_data.get("set_channel"):
+        channel_id = update.message.text.strip()
+        settings = load_settings()
+        settings["channel_id"] = channel_id
+        save_settings(settings)
+        await update.message.reply_text(f"✅ تم تعيين القناة للاشتراك الإجباري: {channel_id}")
+        context.user_data["set_channel"] = False
+        return
+
+    # إرسال إذاعة
+    if context.user_data.get("broadcast"):
+        message = update.message.text
+        users = load_users()
+        count = 0
+        for uid in users:
+            try:
+                await context.bot.send_message(chat_id=int(uid), text=message)
+                count += 1
+            except:
+                continue
+        await update.message.reply_text(f"✅ تم إرسال الرسالة إلى {count} مستخدمين.")
+        context.user_data["broadcast"] = False
